@@ -47,4 +47,4 @@ if sys.version_info[0] >= 3:  # pragma: no cover
         AioHttpApp = _aiohttp_not_installed_error
 
 # This version is replaced during release process.
-__version__ = '2018.0.dev1'
+__version__ = '2019.11.17'
