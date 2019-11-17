@@ -3,6 +3,7 @@ import copy
 import functools
 import logging
 import sys
+import json
 
 import pkg_resources
 import six
@@ -16,8 +17,8 @@ from ..json_schema import Draft4RequestValidator, Draft4ResponseValidator
 from ..utils import all_json, boolean, is_json_mimetype, is_null, is_nullable
 
 _jsonschema_3_or_newer = pkg_resources.parse_version(
-        pkg_resources.get_distribution("jsonschema").version) >= \
-    pkg_resources.parse_version("3.0.0")
+    pkg_resources.get_distribution("jsonschema").version) >= \
+                         pkg_resources.parse_version("3.0.0")
 
 logger = logging.getLogger('connexion.decorators.validation')
 
@@ -49,7 +50,6 @@ class TypeValidationError(Exception):
 
 
 def coerce_type(param, value, parameter_type, parameter_name=None):
-
     def make_type(value, type_literal):
         type_func = TYPE_MAP.get(type_literal)
         return type_func(value)
@@ -138,7 +138,7 @@ class RequestBodyValidator(object):
             if all_json(self.consumes):
                 data = request.json
 
-                empty_body = not(request.body or request.form or request.files)
+                empty_body = not (request.body or request.form or request.files)
                 if data is None and not empty_body and not self.is_null_value_valid:
                     try:
                         ctype_is_json = is_json_mimetype(request.headers.get("Content-Type", ""))
@@ -151,9 +151,9 @@ class RequestBodyValidator(object):
                     else:
                         # the body has contents that were not parsed as JSON
                         raise UnsupportedMediaTypeProblem(
-                                       "Invalid Content-type ({content_type}), expected JSON data".format(
-                                           content_type=request.headers.get("Content-Type", "")
-                                       ))
+                            "Invalid Content-type ({content_type}), expected JSON data".format(
+                                content_type=request.headers.get("Content-Type", "")
+                            ))
 
                 logger.debug("%s validating schema...", request.url)
                 if data is not None or not self.has_default:
@@ -175,6 +175,9 @@ class RequestBodyValidator(object):
                         if k in data:
                             try:
                                 data[k] = coerce_type(param_defn, data[k], 'requestBody', k)
+                                if type(data[k]) is dict and request.files[k].mimetype == 'application/json':
+                                    data[k] = json.load(request.files[k])
+                                    request.files[k].seek(0)
                             except TypeValidationError as e:
                                 errs += [str(e)]
                                 print(errs)
@@ -205,8 +208,8 @@ class RequestBodyValidator(object):
                     error_path_msg=error_path_msg),
                 extra={'validator': 'body'})
             raise BadRequestProblem(detail="{message}{error_path_msg}".format(
-                               message=exception.message,
-                               error_path_msg=error_path_msg))
+                message=exception.message,
+                error_path_msg=error_path_msg))
 
         return None
 
