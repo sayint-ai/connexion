@@ -70,7 +70,7 @@ def coerce_type(param, value, parameter_type, parameter_name=None):
             converted_params.append(converted)
         return converted_params
     elif param_type == 'object':
-        if param_schema.get('properties'):
+        if param_schema.get('properties') or param_schema.get('additionalProperties'):
             def cast_leaves(d, schema):
                 if type(d) is not dict:
                     try:
