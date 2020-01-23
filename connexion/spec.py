@@ -3,10 +3,9 @@ import copy
 import pathlib
 
 import jinja2
-import six
 import yaml
 from openapi_spec_validator.exceptions import OpenAPIValidationError
-from six.moves.urllib.parse import urlsplit
+from urllib.parse import urlsplit
 
 from .exceptions import InvalidSpecification
 from .json_schema import resolve_refs
@@ -135,7 +134,7 @@ class Specification(collections_abc.Mapping):
                 return {
                     str(k): enforce_string_keys(v)
                     for k, v
-                    in six.iteritems(obj)
+                    in obj.items()
                 }
             return obj
 
@@ -145,11 +144,19 @@ class Specification(collections_abc.Mapping):
             return Swagger2Specification(spec)
         return OpenAPISpecification(spec)
 
+    def clone(self):
+        return type(self)(copy.deepcopy(self._raw_spec))
+
     @classmethod
     def load(cls, spec, arguments=None):
         if not isinstance(spec, dict):
             return cls.from_file(spec, arguments=arguments)
         return cls.from_dict(spec)
+
+    def with_base_path(self, base_path):
+        new_spec = self.clone()
+        new_spec.base_path = base_path
+        return new_spec
 
 
 class Swagger2Specification(Specification):
@@ -240,7 +247,7 @@ class OpenAPISpecification(Specification):
             server_vars = server.pop("variables", {})
             server['url'] = server['url'].format(
                 **{k: v['default'] for k, v
-                   in six.iteritems(server_vars)}
+                   in server_vars.items()}
             )
             base_path = urlsplit(server['url']).path
         except IndexError:

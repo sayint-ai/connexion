@@ -14,18 +14,12 @@ from aiohttp.web_middlewares import normalize_path_middleware
 from connexion.apis.abstract import AbstractAPI
 from connexion.exceptions import ProblemException
 from connexion.handlers import AuthErrorHandler
+from connexion.jsonifier import JSONEncoder, Jsonifier
 from connexion.lifecycle import ConnexionRequest, ConnexionResponse
 from connexion.problem import problem
-from connexion.utils import Jsonifier, is_json_mimetype, yamldumper
+from connexion.utils import yamldumper
 from werkzeug.exceptions import HTTPException as werkzeug_HTTPException
 
-try:
-    import ujson as json
-    from functools import partial
-    json.dumps = partial(json.dumps, escape_forward_slashes=True)
-
-except ImportError:  # pragma: no cover
-    import json
 
 logger = logging.getLogger('connexion.apis.aiohttp_api')
 
@@ -120,6 +114,26 @@ class AioHttpApi(AbstractAPI):
     def normalize_string(string):
         return re.sub(r'[^a-zA-Z0-9]', '_', string.strip('/'))
 
+    def _base_path_for_prefix(self, request):
+        """
+        returns a modified basePath which includes the incoming request's
+        path prefix.
+        """
+        base_path = self.base_path
+        if not request.path.startswith(self.base_path):
+            prefix = request.path.split(self.base_path)[0]
+            base_path = prefix + base_path
+        return base_path
+
+    def _spec_for_prefix(self, request):
+        """
+        returns a spec with a modified basePath / servers block
+        which corresponds to the incoming request path.
+        This is needed when behind a path-altering reverse proxy.
+        """
+        base_path = self._base_path_for_prefix(request)
+        return self.specification.with_base_path(base_path).raw
+
     def add_openapi_json(self):
         """
         Adds openapi json to {base_path}/openapi.json
@@ -141,7 +155,8 @@ class AioHttpApi(AbstractAPI):
         if not self.options.openapi_spec_path.endswith("json"):
             return
 
-        openapi_spec_path_yaml = self.options.openapi_spec_path[:-len("json")] + "yaml"
+        openapi_spec_path_yaml = \
+            self.options.openapi_spec_path[:-len("json")] + "yaml"
         logger.debug('Adding spec yaml: %s/%s', self.base_path,
                      openapi_spec_path_yaml)
         self.subapp.router.add_route(
@@ -151,19 +166,19 @@ class AioHttpApi(AbstractAPI):
         )
 
     @asyncio.coroutine
-    def _get_openapi_json(self, req):
+    def _get_openapi_json(self, request):
         return web.Response(
             status=200,
             content_type='application/json',
-            body=self.jsonifier.dumps(self.specification.raw)
+            body=self.jsonifier.dumps(self._spec_for_prefix(request))
         )
 
     @asyncio.coroutine
-    def _get_openapi_yaml(self, req):
+    def _get_openapi_yaml(self, request):
         return web.Response(
             status=200,
             content_type='text/yaml',
-            body=yamldumper(self.specification.raw)
+            body=yamldumper(self._spec_for_prefix(request))
         )
 
     def add_swagger_ui(self):
@@ -219,8 +234,9 @@ class AioHttpApi(AbstractAPI):
     @aiohttp_jinja2.template('index.j2')
     @asyncio.coroutine
     def _get_swagger_ui_home(self, req):
+        base_path = self._base_path_for_prefix(req)
         template_variables = {
-            'openapi_spec_url': (self.base_path + self.options.openapi_spec_path)
+            'openapi_spec_url': (base_path + self.options.openapi_spec_path)
         }
         if self.options.openapi_console_ui_config is not None:
             template_variables['configUrl'] = 'swagger-ui-config.json'
@@ -309,6 +325,7 @@ class AioHttpApi(AbstractAPI):
         """Get response.
         This method is used in the lifecycle decorators
 
+        :type response: aiohttp.web.StreamResponse | (Any,) | (Any, int) | (Any, dict) | (Any, int, dict)
         :rtype: aiohttp.web.Response
         """
         while asyncio.iscoroutine(response):
@@ -316,70 +333,56 @@ class AioHttpApi(AbstractAPI):
 
         url = str(request.url) if request else ''
 
-        logger.debug('Getting data and status code',
-                     extra={
-                         'data': response,
-                         'url': url
-                     })
-
-        if isinstance(response, ConnexionResponse):
-            response = cls._get_aiohttp_response_from_connexion(response, mimetype)
-
-        if isinstance(response, web.StreamResponse):
-            logger.debug('Got stream response with status code (%d)',
-                         response.status, extra={'url': url})
-        else:
-            logger.debug('Got data and status code (%d)',
-                         response.status, extra={'data': response.body, 'url': url})
-
-        return response
+        return cls._get_response(response, mimetype=mimetype, extra_context={"url": url})
 
     @classmethod
-    def get_connexion_response(cls, response, mimetype=None):
-        response.body = cls._cast_body(response.body, mimetype)
+    def _is_framework_response(cls, response):
+        """ Return True if `response` is a framework response class """
+        return isinstance(response, web.StreamResponse)
 
-        if isinstance(response, ConnexionResponse):
-            return response
-
+    @classmethod
+    def _framework_to_connexion_response(cls, response, mimetype):
+        """ Cast framework response class to ConnexionResponse used for schema validation """
         return ConnexionResponse(
             status_code=response.status,
-            mimetype=response.content_type,
+            mimetype=mimetype,
             content_type=response.content_type,
             headers=response.headers,
             body=response.body
         )
 
     @classmethod
-    def _get_aiohttp_response_from_connexion(cls, response, mimetype):
-        content_type = response.content_type if response.content_type else \
-            response.mimetype if response.mimetype else mimetype
-
-        body = cls._cast_body(response.body, content_type)
-
-        return web.Response(
-            status=response.status_code,
-            content_type=content_type,
+    def _connexion_to_framework_response(cls, response, mimetype, extra_context=None):
+        """ Cast ConnexionResponse to framework response class """
+        return cls._build_response(
+            mimetype=response.mimetype or mimetype,
+            status_code=response.status_code,
+            content_type=response.content_type,
             headers=response.headers,
-            body=body
+            data=response.body,
+            extra_context=extra_context,
         )
 
     @classmethod
-    def _cast_body(cls, body, content_type=None):
-        if not isinstance(body, bytes):
-            if content_type and is_json_mimetype(content_type):
-                return json.dumps(body).encode()
+    def _build_response(cls, data, mimetype, content_type=None, headers=None, status_code=None, extra_context=None):
+        if cls._is_framework_response(data):
+            raise TypeError("Cannot return web.StreamResponse in tuple. Only raw data can be returned in tuple.")
 
-            elif isinstance(body, str):
-                return body.encode()
+        data, status_code, serialized_mimetype = cls._prepare_body_and_status_code(data=data, mimetype=mimetype, status_code=status_code, extra_context=extra_context)
 
-            else:
-                return str(body).encode()
+        if isinstance(data, str):
+            text = data
+            body = None
         else:
-            return body
+            text = None
+            body = data
+
+        content_type = content_type or mimetype or serialized_mimetype
+        return web.Response(body=body, text=text, headers=headers, status=status_code, content_type=content_type)
 
     @classmethod
     def _set_jsonifier(cls):
-        cls.jsonifier = Jsonifier(json)
+        cls.jsonifier = Jsonifier(cls=JSONEncoder)
 
 
 class _HttpNotFoundError(HTTPNotFound):

@@ -1,6 +1,7 @@
 import json
 from struct import unpack
 
+import yaml
 from werkzeug.test import Client, EnvironBuilder
 
 from connexion.apps.flask_app import FlaskJSONEncoder
@@ -41,6 +42,36 @@ def test_app(simple_app):
     assert post_greeting.content_type == 'application/json'
     greeting_response = json.loads(post_greeting.data.decode('utf-8'))
     assert greeting_response['greeting'] == 'Hello jsantos'
+
+
+def test_openapi_yaml_behind_proxy(reverse_proxied_app):
+    """ Verify the swagger.json file is returned with base_path updated
+        according to X-Original-URI header.
+    """
+    app_client = reverse_proxied_app.app.test_client()
+
+    headers = {'X-Forwarded-Path': '/behind/proxy'}
+
+    swagger_ui = app_client.get('/v1.0/ui/', headers=headers)
+    assert swagger_ui.status_code == 200
+
+    openapi_yaml = app_client.get(
+        '/v1.0/' + reverse_proxied_app._spec_file,
+        headers=headers
+    )
+    assert openapi_yaml.status_code == 200
+    assert openapi_yaml.headers.get('Content-Type') == 'text/yaml'
+    spec = yaml.load(openapi_yaml.data.decode('utf-8'), Loader=yaml.BaseLoader)
+
+    if reverse_proxied_app._spec_file == 'swagger.yaml':
+        assert b'url = "/behind/proxy/v1.0/swagger.json"' in swagger_ui.data
+        assert spec.get('basePath') == '/behind/proxy/v1.0', \
+            "basePath should contains original URI"
+    else:
+        assert b'url: "/behind/proxy/v1.0/openapi.json"' in swagger_ui.data
+        url = spec.get('servers', [{}])[0].get('url')
+        assert url == '/behind/proxy/v1.0', \
+            "basePath should contains original URI"
 
 
 def test_produce_decorator(simple_app):
@@ -90,7 +121,7 @@ def test_not_content_response(simple_app):
 
     get_no_content_response = app_client.get('/v1.0/test_no_content_response')
     assert get_no_content_response.status_code == 204
-    assert get_no_content_response.content_length in [0, None]
+    assert get_no_content_response.content_length is None
 
 
 def test_pass_through(simple_app):
@@ -133,6 +164,15 @@ def test_exploded_deep_object_param_endpoint_openapi_additional_properties(simpl
     assert response.status_code == 200
     response_data = json.loads(response.data.decode('utf-8', 'replace'))
     assert response_data == {'foo': 'bar', 'fooint': '2'}
+
+
+def test_exploded_deep_object_param_endpoint_openapi_with_dots(simple_openapi_app):
+    app_client = simple_openapi_app.app.test_client()
+
+    response = app_client.get('/v1.0/exploded-deep-object-param-additional-properties?id[foo]=bar&id[foo.foo]=barbar')  # type: flask.Response
+    assert response.status_code == 200
+    response_data = json.loads(response.data.decode('utf-8', 'replace'))
+    assert response_data == {'foo': 'bar', 'foo.foo': 'barbar'}
 
 
 def test_nested_exploded_deep_object_param_endpoint_openapi(simple_openapi_app):
@@ -310,6 +350,7 @@ def test_get_enum_response(simple_app):
     app_client = simple_app.app.test_client()
     resp = app_client.get('/v1.0/get_enum_response')
     assert resp.status_code == 200
+
 
 def test_get_httpstatus_response(simple_app):
     app_client = simple_app.app.test_client()

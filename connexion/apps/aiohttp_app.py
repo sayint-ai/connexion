@@ -85,11 +85,11 @@ class AioHttpApp(AbstractApp):
         if self.server == 'aiohttp':
             logger.info('Listening on %s:%s..', self.host, self.port)
 
-            access_log = options.get('access_log')
+            access_log = options.pop('access_log', None)
 
-            if options.get('use_default_access_log'):
+            if options.pop('use_default_access_log', None):
                 access_log = logger
 
-            web.run_app(self.app, port=self.port, host=self.host, access_log=access_log)
+            web.run_app(self.app, port=self.port, host=self.host, access_log=access_log, **options)
         else:
             raise Exception('Server {} not recognized'.format(self.server))

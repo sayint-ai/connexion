@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-import flask
+import datetime
+import uuid
+
 from flask import jsonify, redirect
 
-from connexion import NoContent, ProblemException, context
+from connexion import NoContent, ProblemException, context, request
 
 
 class DummyClass(object):
@@ -131,6 +133,11 @@ def schema(new_stack):
     return new_stack
 
 
+def forward(body):
+    """Return a response with the same payload as in the request body."""
+    return body
+
+
 def schema_response_object(valid):
     if valid == "invalid_requirements":
         return {"docker_version": 1.0}
@@ -208,6 +215,10 @@ def test_parameter_validation():
 
 
 def test_required_query_param():
+    return ''
+
+
+def test_apikey_query_parameter_validation():
     return ''
 
 
@@ -295,10 +306,9 @@ def test_formdata_missing_param():
 
 
 def test_formdata_file_upload(formData, **kwargs):
-    if len(formData) == 1:
-        return {x.filename: x.read().decode('utf-8', 'replace') for x in formData}
-
-    return [{x.filename: x.read().decode('utf-8', 'replace')} for x in formData]
+    filename = formData.filename
+    contents = formData.read().decode('utf-8', 'replace')
+    return {filename: contents}
 
 
 def test_formdata_file_upload_missing_param():
@@ -437,6 +447,14 @@ def more_than_one_scope_defined(**kwargs):
     return "OK"
 
 
+def optional_auth(**kwargs):
+    key = apikey_info(request.headers.get('X-AUTH'))
+    if key is None:
+        return "Unauthenticated"
+    else:
+        return "Authenticated"
+
+
 def test_args_kwargs(*args, **kwargs):
     return kwargs
 
@@ -521,6 +539,12 @@ def post_user(body):
     body.pop('password', None)
     return body
 
+def post_multipart_form(body):
+    x = body['x']
+    x['name'] += "-reply"
+    x['age'] += 10
+    return x
+
 
 def apikey_info(apikey, required_scopes=None):
     if apikey == 'mykey':
@@ -564,3 +588,15 @@ def patch_add_operation_on_http_methods_only():
 
 def trace_add_operation_on_http_methods_only():
     return ""
+
+
+def get_datetime():
+    return {'value': datetime.datetime(2000, 1, 2, 3, 4, 5, 6)}
+
+
+def get_date():
+    return {'value': datetime.date(2000, 1, 2)}
+
+
+def get_uuid():
+    return {'value': uuid.UUID(hex='e7ff66d0-3ec2-4c4e-bed0-6e4723c24c51')}

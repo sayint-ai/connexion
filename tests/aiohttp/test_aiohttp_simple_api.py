@@ -4,7 +4,6 @@ import sys
 import pytest
 import yaml
 
-import aiohttp.web
 from conftest import TEST_FOLDER
 from connexion import AioHttpApp
 
@@ -57,10 +56,10 @@ def test_swagger_json(aiohttp_api_spec_dir, aiohttp_client):
 
     app_client = yield from aiohttp_client(app.app)
     swagger_json = yield from app_client.get('/v1.0/swagger.json')
-    json_ = yield from swagger_json.read()
 
     assert swagger_json.status == 200
-    assert api.specification.raw == json.loads(json_)
+    json_ = yield from swagger_json.json()
+    assert api.specification.raw == json_
 
 
 @asyncio.coroutine
@@ -190,6 +189,20 @@ def test_swagger_ui_index_with_config(aiohttp_api_spec_dir, aiohttp_client):
 
 
 @asyncio.coroutine
+def test_pythonic_path_param(aiohttp_api_spec_dir, aiohttp_client):
+    app = AioHttpApp(__name__, port=5001,
+                     specification_dir=aiohttp_api_spec_dir,
+                     debug=True)
+    app.add_api('openapi_simple.yaml', pythonic_params=True)
+
+    app_client = yield from aiohttp_client(app.app)
+    pythonic = yield from app_client.get('/v1.0/pythonic/100')
+    assert pythonic.status == 200
+    j = yield from pythonic.json()
+    assert j['id_'] == 100
+
+
+@asyncio.coroutine
 def test_swagger_ui_static(aiohttp_api_spec_dir, aiohttp_client):
     app = AioHttpApp(__name__, port=5001,
                      specification_dir=aiohttp_api_spec_dir,
@@ -283,7 +296,7 @@ def test_validate_responses(aiohttp_app, aiohttp_client):
     app_client = yield from aiohttp_client(aiohttp_app.app)
     get_bye = yield from app_client.get('/v1.0/aiohttp_validate_responses')
     assert get_bye.status == 200
-    assert (yield from get_bye.read()) == b'{"validate": true}'
+    assert (yield from get_bye.json()) == {"validate": True}
 
 
 @asyncio.coroutine
