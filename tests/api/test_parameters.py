@@ -117,6 +117,16 @@ def test_strict_extra_query_param(strict_app):
     assert response['detail'] == "Extra query parameter(s) extra_parameter not in spec"
 
 
+def test_strict_formdata_param(strict_app):
+    app_client = strict_app.app.test_client()
+    headers = {'Content-type': 'application/x-www-form-urlencoded'}
+    url = '/v1.0/test_array_csv_form_param'
+    resp = app_client.post(url, headers=headers, data={"items":"mango"})
+    response = json.loads(resp.data.decode('utf-8', 'replace'))
+    assert response == ['mango']
+    assert resp.status_code == 200
+
+
 def test_path_parameter_someint(simple_app):
     app_client = simple_app.app.test_client()
     resp = app_client.get('/v1.0/test-int-path/123')  # type: flask.Response
@@ -137,8 +147,8 @@ def test_path_parameter_somefloat(simple_app):
     assert resp.status_code == 404
 
 
-def test_default_param(simple_app):
-    app_client = simple_app.app.test_client()
+def test_default_param(strict_app):
+    app_client = strict_app.app.test_client()
     resp = app_client.get('/v1.0/test-default-query-parameter')
     assert resp.status_code == 200
     response = json.loads(resp.data.decode('utf-8', 'replace'))
@@ -210,17 +220,6 @@ def test_formdata_file_upload(simple_app):
     assert resp.status_code == 200
     response = json.loads(resp.data.decode('utf-8', 'replace'))
     assert response == {'filename.txt': 'file contents'}
-
-def test_formdata_multiple_file_upload(simple_app):
-    app_client = simple_app.app.test_client()
-    resp = app_client.post('/v1.0/test-formData-file-upload',
-                           data={'formData': [(BytesIO(b'file contents'), 'filename.txt'),
-                                              (BytesIO(b'file contents 2'), 'filename2.txt')]
-                                              })
-    assert resp.status_code == 200
-    response = json.loads(resp.data.decode('utf-8', 'replace'))
-    assert response == [{'filename.txt': 'file contents'},
-                        {'filename2.txt': 'file contents 2'}]
 
 
 def test_formdata_file_upload_bad_request(simple_app):
@@ -402,6 +401,22 @@ def test_param_sanitization(simple_app):
         headers={'Content-Type': 'application/json'})
     assert resp.status_code == 200
     assert json.loads(resp.data.decode('utf-8', 'replace')) == body
+
+def test_no_sanitization_in_request_body(simple_app):
+    app_client = simple_app.app.test_client()
+    data = {
+        'name': 'John',
+        '$surname': 'Doe',
+        '1337': True,
+        '!#/bin/sh': False,
+        '(1/0)': 'division by zero',
+        's/$/EOL/': 'regular expression',
+        '@8am': 'time',
+    }
+    response = app_client.post('/v1.0/forward', json=data)
+
+    assert response.status_code == 200
+    assert response.json == data
 
 def test_parameters_snake_case(snake_case_app):
     app_client = snake_case_app.app.test_client()

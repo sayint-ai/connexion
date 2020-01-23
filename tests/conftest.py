@@ -72,7 +72,7 @@ def simple_api_spec_dir():
     return FIXTURES_FOLDER / 'simple'
 
 
-@pytest.fixture
+@pytest.fixture(scope='session')
 def aiohttp_api_spec_dir():
     return FIXTURES_FOLDER / 'aiohttp'
 
@@ -95,6 +95,11 @@ def default_param_error_spec_dir():
 @pytest.fixture
 def json_validation_spec_dir():
     return FIXTURES_FOLDER / 'json_validation'
+
+
+@pytest.fixture(scope='session')
+def json_datetime_dir():
+    return FIXTURES_FOLDER / 'datetime_support'
 
 
 def build_app_from_fixture(api_spec_folder, spec_file='openapi.yaml', **kwargs):
@@ -121,6 +126,44 @@ def simple_app(request):
 @pytest.fixture(scope="session", params=OPENAPI3_SPEC)
 def simple_openapi_app(request):
     return build_app_from_fixture('simple', request.param, validate_responses=True)
+
+
+@pytest.fixture(scope="session", params=SPECS)
+def reverse_proxied_app(request):
+
+    # adapted from http://flask.pocoo.org/snippets/35/
+    class ReverseProxied(object):
+
+        def __init__(self, app, script_name=None, scheme=None, server=None):
+            self.app = app
+            self.script_name = script_name
+            self.scheme = scheme
+            self.server = server
+
+        def __call__(self, environ, start_response):
+            script_name = environ.get('HTTP_X_FORWARDED_PATH', '') or self.script_name
+            if script_name:
+                environ['SCRIPT_NAME'] = "/" + script_name.lstrip("/")
+                path_info = environ['PATH_INFO']
+                if path_info.startswith(script_name):
+                    environ['PATH_INFO_OLD'] = path_info
+                    environ['PATH_INFO'] = path_info[len(script_name):]
+            scheme = environ.get('HTTP_X_SCHEME', '') or self.scheme
+            if scheme:
+                environ['wsgi.url_scheme'] = scheme
+            server = environ.get('HTTP_X_FORWARDED_SERVER', '') or self.server
+            if server:
+                environ['HTTP_HOST'] = server
+            return self.app(environ, start_response)
+
+    app = build_app_from_fixture('simple', request.param, validate_responses=True)
+    flask_app = app.app
+    proxied = ReverseProxied(
+        flask_app.wsgi_app,
+        script_name='/reverse_proxied/'
+    )
+    flask_app.wsgi_app = proxied
+    return app
 
 
 @pytest.fixture(scope="session", params=SPECS)
@@ -177,11 +220,6 @@ def unordered_definition_app(request):
 def bad_operations_app(request):
     return build_app_from_fixture('bad_operations', request.param,
                                   resolver_error=501)
-
-
-@pytest.fixture(scope="session", params=SPECS)
-def query_sanitazion(request):
-    return build_app_from_fixture('query_sanitazion', request.param)
 
 
 if sys.version_info < (3, 5, 3) and sys.version_info[0] == 3:

@@ -3,13 +3,9 @@ import abc
 import functools
 import logging
 import re
-
-import six
-
 import json
+from .. import utils
 
-from ..utils import all_json
-from ..utils import create_empty_dict_from_list
 from .decorator import BaseDecorator
 
 logger = logging.getLogger('connexion.decorators.uri_parsing')
@@ -22,8 +18,7 @@ QUERY_STRING_DELIMITERS = {
 }
 
 
-@six.add_metaclass(abc.ABCMeta)
-class AbstractURIParser(BaseDecorator):
+class AbstractURIParser(BaseDecorator, metaclass=abc.ABCMeta):
     parsable_parameters = ["query", "path"]
 
     def __init__(self, param_defns, body_defn):
@@ -101,20 +96,6 @@ class AbstractURIParser(BaseDecorator):
         """
         resolved_param = {}
         for k, values in params.items():
-            # extract the dict keys if specified with style: deepObject and explode: true
-            # according to https://swagger.io/docs/specification/serialization/#query
-            dict_keys = re.findall(r'\[(\w+)\]', k)
-            if dict_keys:
-                k = k.split("[", 1)[0]
-                param_defn = self.param_defns.get(k)
-                if param_defn and param_defn.get('style', None) == 'deepObject' and param_defn.get('explode', False):
-                    param_schema = self.param_schemas.get(k)
-                    if isinstance(values, list) and len(values) == 1 and param_schema['type'] != 'array':
-                        values = values[0]
-                    resolved_param.setdefault(k, {})
-                    resolved_param[k].update(create_empty_dict_from_list(dict_keys, {}, values))
-                    continue
-
             param_defn = self.param_defns.get(k)
             param_schema = self.param_schemas.get(k)
 
@@ -135,20 +116,7 @@ class AbstractURIParser(BaseDecorator):
             else:
                 resolved_param[k] = values[-1]
 
-        # set defaults if values have not been set yet
-        resolved_param = self.set_default_values(resolved_param, self.param_schemas)
-
         return resolved_param
-
-    def set_default_values(self, _dict, _properties):
-        """set recursively default values in objects/dicts"""
-        for p_id, property in _properties.items():
-            if 'default' in property and p_id not in _dict:
-                _dict[p_id] = property['default']
-            elif property.get('type', False) == 'object' and 'properties' in property:
-                _dict.setdefault(p_id, {})
-                _dict[p_id] = self.set_default_values(_dict[p_id], property['properties'])
-        return _dict
 
     def __call__(self, function):
         """
@@ -207,11 +175,43 @@ class OpenAPIURIParser(AbstractURIParser):
                 self._resolve_param_duplicates(form_data[k], encoding, 'form')
             if defn and defn["type"] == "array":
                 form_data[k] = self._split(form_data[k], encoding, 'form')
-            elif 'contentType' in encoding and all_json([encoding.get('contentType')]):
+            elif 'contentType' in encoding and utils.all_json([encoding.get('contentType')]):
                 form_data[k] = json.loads(form_data[k])
         return form_data
 
+    @staticmethod
+    def _make_deep_object(k, v):
+        """ consumes keys, value pairs like (a[foo][bar], "baz")
+            returns (a, {"foo": {"bar": "baz"}}}, is_deep_object)
+        """
+        root_key = k.split("[", 1)[0]
+        if k == root_key:
+            return (k, v, False)
+        key_path = re.findall(r'\[([^\[\]]*)\]', k)
+        root = prev = node = {}
+        for k in key_path:
+            node[k] = {}
+            prev = node
+            node = node[k]
+        prev[k] = v[0]
+        return (root_key, [root], True)
+
+    def _preprocess_deep_objects(self, query_data):
+        """ deep objects provide a way of rendering nested objects using query
+            parameters.
+        """
+        deep = [self._make_deep_object(k, v) for k, v in query_data.items()]
+        root_keys = [k for k, v, is_deep_object in deep]
+        ret = dict.fromkeys(root_keys, [{}])
+        for k, v, is_deep_object in deep:
+            if is_deep_object:
+                ret[k] = [utils.deep_merge(v[0], ret[k][0])]
+            else:
+                ret[k] = v
+        return ret
+
     def resolve_query(self, query_data):
+        query_data = self._preprocess_deep_objects(query_data)
         return self.resolve_params(query_data, 'query')
 
     def resolve_path(self, path_data):

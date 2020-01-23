@@ -1,14 +1,7 @@
 import functools
 import importlib
 
-import six
 import yaml
-
-# Python 2/3 compatibility:
-try:
-    py_string = unicode
-except NameError:  # pragma: no cover
-    py_string = str  # pragma: no cover
 
 
 def boolean(s):
@@ -36,7 +29,7 @@ def boolean(s):
 # https://github.com/swagger-api/swagger-spec/blob/master/versions/2.0.md#data-types
 TYPE_MAP = {'integer': int,
             'number': float,
-            'string': py_string,
+            'string': str,
             'boolean': boolean,
             'array': list,
             'object': dict}  # map of swagger types to python types
@@ -45,6 +38,24 @@ TYPE_MAP = {'integer': int,
 def make_type(value, _type):
     type_func = TYPE_MAP[_type]  # convert value to right type
     return type_func(value)
+
+
+def deep_merge(a, b):
+    """ merges b into a
+        in case of conflict the value from b is used
+    """
+    for key in b:
+        if key in a:
+            if isinstance(a[key], dict) and isinstance(b[key], dict):
+                deep_merge(a[key], b[key])
+            elif a[key] == b[key]:
+                pass
+            else:
+                # b overwrites a
+                a[key] = b[key]
+        else:
+            a[key] = b[key]
+    return a
 
 
 def deep_getattr(obj, attr):
@@ -69,9 +80,10 @@ def deep_get(obj, keys):
     """
     if not keys:
         return obj
-    try:
+
+    if isinstance(obj, list):
         return deep_get(obj[int(keys[0])], keys[1:])
-    except ValueError:
+    else:
         return deep_get(obj[keys[0]], keys[1:])
 
 
@@ -164,30 +176,6 @@ def is_null(value):
     return False
 
 
-class Jsonifier(object):
-    def __init__(self, json_):
-        self.json = json_
-
-    def dumps(self, data):
-        """ Central point where JSON serialization happens inside
-        Connexion.
-        """
-        return "{}\n".format(self.json.dumps(data, indent=2))
-
-    def loads(self, data):
-        """ Central point where JSON serialization happens inside
-        Connexion.
-        """
-        if isinstance(data, six.binary_type):
-            data = data.decode()
-
-        try:
-            return self.json.loads(data)
-        except Exception:
-            if isinstance(data, six.string_types):
-                return data
-
-
 def has_coroutine(function, api=None):
     """
     Checks if function is a coroutine.
@@ -259,12 +247,3 @@ def yamldumper(openapi):
     yaml.representer.SafeRepresenter.represent_scalar = my_represent_scalar
 
     return yaml.dump(openapi, allow_unicode=True, Dumper=NoAnchorDumper)
-
-
-def create_empty_dict_from_list(_list, _dict, _end_value):
-    """create from ['foo', 'bar'] a dict like {'foo': {'bar': {}}} recursively. needed for converting query params"""
-    current_key = _list.pop(0)
-    if _list:
-        return {current_key: create_empty_dict_from_list(_list, _dict, _end_value)}
-    else:
-        return {current_key: _end_value}
